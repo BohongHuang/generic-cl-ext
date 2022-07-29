@@ -18,11 +18,15 @@
   :depends-on (map)
   (is = #(1 2 3 4) (collect-to 'vector '(1 2 3 4)))
   (of-type iterator (collect-to 'iterator '(1 2 3 4)))
-  (is = #(1 2 3 4) (collect-to 'vector (collect-to 'iterator '(1 2 3 4)))))
+  (is = #(1 2 3 4) (collect-to 'vector (collect-to 'iterator '(1 2 3 4))))
+  (is = '(1 2 3 4) (collect-to 'list (collect-to 'iterator '(1 2 3 4)))))
 
 (define-test flatten
-  :depends-on (map)
+  :depends-on (map collect-to)
   (is = '(1 2 3 4) (flatten '(() (1) () (2 3 4) ())))
+  (is = '(1 2 3 4) (collect-to 'list (flatten (iterator (mapcar #'iterator '(() (1) () (2 3 4) ()))))))
+  (is = nil (collect-to 'list (flatten (iterator (list (iterator nil))))))
+  (is = nil (collect-to 'list (flatten (iterator nil))))
   (fail  (flatten '(() (1 2 3) 4))))
 
 (define-test flatmap
@@ -42,6 +46,7 @@
   :depends-on (collect-to)
   (is = #(1 2) (take 2 #(1 2 3 4)))
   (is = #(1 2 3 4) (take 10 #(1 2 3 4)))
+  (is = '(1 2 3 4) (collect-to 'list (take 10 (iterator #(1 2 3 4)))))
   (is = nil (take 10 nil)))
 
 (define-test take-while
@@ -52,6 +57,7 @@
   :depends-on (collect-to)
   (is = #(3 4) (drop 2 #(1 2 3 4)))
   (is = #(1 2 3 4) (drop 0 #(1 2 3 4)))
+  (is = '(1 2 3 4) (collect-to 'list (drop 0 (iterator #(1 2 3 4)))))
   (is = nil (drop 10 '(1 2 3 4))))
 
 (define-test drop-while
@@ -61,10 +67,11 @@
   (is = nil (drop-while (lambda (x) (< x 10)) '(1 2 3 4))))
 
 (define-test zip
-  :depends-on (map)
+  :depends-on (map collect-to)
   (is = '(1 2 3 4) (zip '(1 2 3 4)))
   (is = '((1 . 5) (2 . 6) (3 . 7) (4 . 8)) (zip '(1 2 3 4) '(5 6 7 8)))
   (is = '((1 5 9) (2 6 10) (3 7 11) (4 8 12)) (zip '(1 2 3 4) '(5 6 7 8) '(9 10 11 12)))
+  (is = '((1 . 5) (2 . 6) (3 . 7) (4 . 8)) (collect-to 'list (zip (iterator '(1 2 3 4)) (iterator '(5 6 7 8)))))
   (is = nil (zip '(1 2 3 4) '(5 6 7 8) nil)))
 
 (define-test zip-with-index

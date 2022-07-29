@@ -1,21 +1,31 @@
 (defpackage :generic-cl-ext.collection
   (:use :generic-cl)
   (:export :collect :collect-to
+           :map :foreach
            :zip :zip-with-index
            :filter :filter-not
            :flatten :flatmap
            :fold-left :scan-left
-           :take :take-while :drop :drop-while :index-of :index-where :last-index-where :last-index-of
-           :find-last :find-last-if :find-last-if-not))
+           :take :take-while
+           :drop :drop-while
+           :index-of :index-where
+           :last-index-of :last-index-where
+           :find :find-if :find-if-not
+           :find-last :find-last-if :find-last-if-not
+           :forall :exists))
 
 (in-package :generic-cl-ext.collection)
 
 (declaim (ftype (function (t &optional fixnum fixnum t) iterator) iterator))
 
 (defmethod (setf first) (value sequence)
+  #+ecl
+  (declare (optimize (speed 2)))
   (setf (elt sequence 0) value))
 
 (defmethod (setf last) (value sequence &optional (n 0))
+  #+ecl
+  (declare (optimize (speed 2)))
   (setf (elt sequence (cl:- (length sequence) 1 n)) value))
 
 (defstruct (map (:include iterator))
@@ -62,18 +72,6 @@
 
 (defmethod at ((iterator zip))
   (map #'at (zip-iterators iterator)))
-
-(defstruct (index-generator (:include iterator))
-  (index 0))
-
-(defmethod endp ((iterator index-generator))
-  nil)
-
-(defmethod advance ((iterator index-generator))
-  (incf (index-generator-index iterator)))
-
-(defmethod at ((iterator index-generator))
-  (index-generator-index iterator))
 
 (defstruct (iterator-of-iterable (:include iterator))
   iterator
@@ -207,37 +205,12 @@
              (first elem-with-index))
            (remove-if-not (lambda (elem-with-index)
                             (<= (or start 0) (second elem-with-index) (or end most-positive-fixnum)))
-                          (make-zip :iterators (list iterator (make-index-generator)))))))
+                          (make-zip :iterators (list iterator (iterator (range 0))))))))
 
 (defmethod concatenate ((iterator iterator) &rest iterators)
   (if iterators
       (make-iterator-of-iterable :iterator (iterator (cons iterator iterators)))
       iterator))
-
-(declaim (inline zip))
-(defun zip (iterable1 &optional iterable2 &rest iterables)
-  (if iterable2
-      (if iterables
-          (apply #'map (lambda (&rest args) args) (cons iterable1 (cons iterable2 iterables)))
-          (apply #'map (lambda (a b) (cons a b)) (list iterable1 iterable2)))
-      iterable1))
-
-(declaim (inline zip-with-index))
-(defun zip-with-index (iterable)
-  (zip iterable (make-index-generator)))
-
-(declaim (inline collect-to))
-(defun collect-to (type &rest iterables)
-  (if (subtypep type 'iterator)
-      (iterator (apply #'zip iterables))
-      (apply #'map-to type #'identity iterables)))
-
-(declaim (inline collect))
-(defun collect (&rest iterables)
-  (apply #'collect-to 'vector iterables))
-
-(setf (fdefinition 'filter) #'remove-if-not)
-(setf (fdefinition 'filter-not) #'remove-if)
 
 (defmethod generic-type-of (obj)
   (type-of obj))
@@ -248,51 +221,96 @@
 (defmethod generic-type-of ((vector vector))
   'vector)
 
-(declaim (inline flatten))
-(defun flatten (iterable)
-  (collect-to (generic-type-of iterable)
-              (make-iterator-of-iterable :iterator (iterator iterable))))
+(defmethod generic-type-of ((iterator iterator))
+  'iterator)
 
-(declaim (inline flatmap))
-(defun flatmap (&rest map-args)
-  (flatten (apply #'map map-args)))
+(defmethod zip (iterable &rest iterables)
+  (if iterables
+      (if (cdr iterables)
+          (apply #'map (lambda (&rest args) args) iterable iterables)
+          (apply #'map (lambda (a b) (cons a b)) iterable iterables))
+      iterable))
 
-(declaim (inline fold-left))
-(defun fold-left (function init-value iterable)
+(defmethod map-to ((type (eql 'iterator)) function &rest iterables)
+  (apply #'map
+         function
+         (iterator (car iterables))
+         (mapcar #'iterator (cdr iterables))))
+
+(defmethod collect-to (type iterable &rest iterables)
+  (apply #'map-to type #'identity iterable iterables))
+
+(defmethod zip-with-index ((iterator iterator))
+  (zip iterator (iterator (range 0))))
+
+(defmethod zip-with-index ((sequence sequence))
+  (zip sequence (range 0)))
+
+(defmethod collect (iterable &rest iterables)
+  (apply #'collect-to 'list iterable iterables))
+
+(defmethod filter (function iterable)
+  (remove-if-not function iterable))
+
+(defmethod filter-not (function iterable)
+  (remove-if function iterable))
+
+(defmethod flatten ((sequence sequence))
+  (map-extend #'identity sequence))
+
+(defmethod flatten ((iterator iterator))
+  (make-iterator-of-iterable :iterator iterator))
+
+(defmethod flatmap (function sequence &rest sequences)
+  (flatten (apply #'map function sequence sequences)))
+
+(defmethod flatmap (function (sequence sequence) &rest sequences)
+  (apply #'map-extend function sequence sequences))
+
+(defmethod fold-left (function init-value (iterator iterator))
   (let ((acc init-value))
-    (doiter (iterator iterable)
+    (doiter (iterator iterator)
       (setf acc (funcall function acc (at iterator))))
     acc))
 
-(declaim (inline scan-left))
-(defun scan-left (function init-value iterable)
+(defmethod fold-left (function init-value (sequence sequence))
+  (fold-left function init-value (iterator sequence)))
+
+(defmethod scan-left (function init-value (iterator iterator))
   (let ((acc init-value))
     (map (lambda (it)
            (setf acc (funcall function acc it)))
-         iterable)))
+         iterator)))
 
-(declaim (inline take))
-(defun take (n iterable)
-  (collect-to (generic-type-of iterable)
-              (make-take-n :n n :iterator (iterator iterable))))
+(defmethod scan-left (function init-value (sequence sequence))
+  (collect-to (generic-type-of sequence) (scan-left function init-value (iterator sequence))))
 
-(declaim (inline take-while))
-(defun take-while (function iterable)
-  (collect-to (generic-type-of iterable)
-              (make-take-while :function function :iterator (iterator iterable))))
+(defmethod take (n (iterator iterator))
+  (make-take-n :n n :iterator iterator))
 
-(declaim (inline drop-while))
-(defun drop-while (function iterable)
-  (collect-to (generic-type-of iterable)
-              (make-drop-while :function function :iterator (iterator iterable))))
+(defmethod take (n (sequence sequence))
+  (subseq sequence 0 (min (max n 0) (length sequence))))
 
-(declaim (inline drop))
-(defun drop (n iterable)
-  (collect-to (generic-type-of iterable)
-              (make-drop-n :n n :iterator (iterator iterable))))
+(defmethod take-while (function (iterator iterator))
+  (make-take-while :function function :iterator iterator))
 
-(declaim (inline index-where))
-(defun index-where (function iterable)
+(defmethod take-while (function (sequence sequence))
+  (collect-to (generic-type-of sequence) (take-while function (iterator sequence))))
+
+(defmethod drop (n (iterator iterator))
+  (make-drop-n :n n :iterator iterator))
+
+(defmethod drop (n (sequence sequence))
+  (subseq sequence (min (max n 0) (length sequence)) (length sequence)))
+
+
+(defmethod drop-while (function (iterator iterator))
+  (make-drop-while :function function :iterator iterator))
+
+(defmethod drop-while (function (sequence sequence))
+  (collect-to (generic-type-of sequence) (drop-while function (iterator sequence))))
+
+(defmethod index-where (function iterable)
   (let ((index 0))
     (doiter (iterator iterable)
       (if (funcall function (at iterator))
@@ -300,12 +318,10 @@
           (incf index)))
     -1))
 
-(declaim (inline index-of))
-(defun index-of (obj iterable)
+(defmethod index-of (obj iterable)
   (index-where (lambda (x) (= x obj)) iterable))
 
-(declaim (inline last-index-where))
-(defun last-index-where (function iterable)
+(defmethod last-index-where (function iterable)
   (let ((index 0)
         (result -1))
     (doiter (iterator iterable)
@@ -314,18 +330,22 @@
       (incf index))
     result))
 
-(declaim (inline last-index-of))
-(defun last-index-of (obj iterable)
+(defmethod last-index-of (obj iterable)
   (last-index-where (lambda (x) (= x obj)) iterable))
 
-(declaim (inline find-last-if))
-(defun find-last-if (function iterable)
+(defmethod find-last-if (function iterable)
   (last (filter function iterable)))
 
-(declaim (inline find-last-if-not))
-(defun find-last-if-not (function iterable)
+(defmethod find-last-if-not (function iterable)
   (find-last-if (complement function) iterable))
 
-(declaim (inline find-last))
-(defun find-last (obj iterable)
+(defmethod find-last (obj iterable)
   (find-last-if (lambda (x) (= x obj)) iterable))
+
+(defmethod forall (function iterable &rest iterables)
+  (apply #'every function iterable iterables))
+
+(defmethod exists (function iterable &rest iterables)
+  (apply #'some function iterable iterables))
+
+
