@@ -1,22 +1,40 @@
-(defpackage :generic-cl-ext.collection
-  (:use :generic-cl)
-  (:export :collect :collect-to
-           :map :foreach
-           :zip :zip-with-index
-           :filter :filter-not
-           :flatten :flatmap
-           :fold-left :scan-left
-           :take :take-while
-           :drop :drop-while
-           :index-of :index-where
-           :last-index-of :last-index-where
-           :find :find-if :find-if-not
-           :find-last :find-last-if :find-last-if-not
-           :forall :exists))
+(defpackage generic-cl-ext.collection
+  (:use #:generic-cl)
+  (:shadow #:foreach #:random)
+  (:export #:map #:foreach
+           #:zip #:zip-with-index
+           #:filter #:filter-not
+           #:flatten #:flatmap
+           #:fold-left #:fold-right #:scan-left
+           #:take #:take-while
+           #:drop #:drop-while
+           #:index-of #:index-where
+           #:last-index-of #:last-index-where
+           #:find #:find-if #:find-if-not
+           #:find-last #:find-last-if #:find-last-if-not
+           #:forall #:exists
+           #:sliding #:random))
 
-(in-package :generic-cl-ext.collection)
+(in-package #:generic-cl-ext.collection)
 
-(declaim (ftype (function (t &optional fixnum fixnum t) iterator) iterator))
+(defmethod random ((integer integer) &key)
+  (cl:random integer))
+
+(defmethod random ((float float) &key)
+  (cl:random float))
+
+(defmethod random ((sequence sequence) &key)
+  (elt sequence (random (length sequence))))
+
+(defmethod foreach (function sequence &rest sequences)
+  (apply #'map function sequence sequences)
+  nil)
+
+(defmethod foreach (function (sequence sequence) &rest sequences)
+  (apply #'generic-cl:foreach function (cons sequence sequences)))
+
+(defmethod foreach (function (iterator iterator) &rest iterators)
+  (apply #'generic-cl:foreach function (cons iterator iterators)))
 
 (defmethod (setf first) (value sequence)
   #+ecl
@@ -183,6 +201,44 @@
   (drop-n-init-iterator iterator)
   (endp (drop-n-iterator iterator)))
 
+(defstruct (sliding (:include iterator))
+  iterator
+  size
+  step
+  window)
+
+(defun sliding-init-iterator (self)
+  (let ((iterator (sliding-iterator self)))
+    (loop :while (and (< (length (sliding-window self)) (sliding-size self))
+                      (not (endp iterator)))
+          :do (progn (if (sliding-window self)
+                         (nconc (sliding-window self) (list (at iterator)))
+                         (push (at iterator) (sliding-window self)))
+                     (advance iterator)))))
+
+(defmethod at ((iterator sliding))
+  (sliding-init-iterator iterator)
+  (copy-list (sliding-window iterator)))
+
+(defmethod advance ((iterator sliding))
+  (sliding-init-iterator iterator)
+  (dotimes (_ (sliding-step iterator))
+    (if (sliding-window iterator)
+        (pop (sliding-window iterator))
+        (unless (endp (sliding-iterator iterator))
+          (advance (sliding-iterator iterator))))))
+
+(defmethod endp ((iterator sliding))
+  (sliding-init-iterator iterator)
+  (< (length (sliding-window iterator)) (sliding-size iterator)))
+
+(defmethod sliding ((sequence sequence) size &optional (step 1))
+  (coerce (sliding (iterator sequence) size step)
+          (generic-type-of sequence)))
+
+(defmethod sliding ((iterator iterator) size &optional (step 1))
+  (make-sliding :iterator iterator :size size :step step))
+
 (defmethod map (function (iterator iterator) &rest iterators)
   (if iterators
       (make-map :iterator (make-zip :iterators (cons iterator iterators))
@@ -237,17 +293,17 @@
          (iterator (car iterables))
          (mapcar #'iterator (cdr iterables))))
 
-(defmethod collect-to (type iterable &rest iterables)
-  (apply #'map-to type #'identity iterable iterables))
+(defmethod coerce ((sequence sequence) type)
+  (map-to type #'identity sequence))
+
+(defmethod coerce ((iterator iterator) type) 
+  (map-to type #'identity iterator))
 
 (defmethod zip-with-index ((iterator iterator))
   (zip iterator (iterator (range 0))))
 
 (defmethod zip-with-index ((sequence sequence))
   (zip sequence (range 0)))
-
-(defmethod collect (iterable &rest iterables)
-  (apply #'collect-to 'list iterable iterables))
 
 (defmethod filter (function iterable)
   (remove-if-not function iterable))
@@ -276,6 +332,18 @@
 (defmethod fold-left (function init-value (sequence sequence))
   (fold-left function init-value (iterator sequence)))
 
+(defmethod fold-right (function init-value (iterator iterator))
+  (labels ((recur (iter)
+             (if (endp iter)
+                 init-value
+                 (let ((value (at iter)))
+                   (advance iter)
+                   (funcall function value (recur iter))))))
+    (recur iterator)))
+
+(defmethod fold-right (function init-value (sequence sequence))
+  (fold-right function init-value (iterator sequence)))
+
 (defmethod scan-left (function init-value (iterator iterator))
   (let ((acc init-value))
     (map (lambda (it)
@@ -283,7 +351,8 @@
          iterator)))
 
 (defmethod scan-left (function init-value (sequence sequence))
-  (collect-to (generic-type-of sequence) (scan-left function init-value (iterator sequence))))
+  (coerce (scan-left function init-value (iterator sequence))
+          (generic-type-of sequence)))
 
 (defmethod take (n (iterator iterator))
   (make-take-n :n n :iterator iterator))
@@ -295,7 +364,8 @@
   (make-take-while :function function :iterator iterator))
 
 (defmethod take-while (function (sequence sequence))
-  (collect-to (generic-type-of sequence) (take-while function (iterator sequence))))
+  (coerce (take-while function (iterator sequence))
+          (generic-type-of sequence)))
 
 (defmethod drop (n (iterator iterator))
   (make-drop-n :n n :iterator iterator))
@@ -303,12 +373,12 @@
 (defmethod drop (n (sequence sequence))
   (subseq sequence (min (max n 0) (length sequence)) (length sequence)))
 
-
 (defmethod drop-while (function (iterator iterator))
   (make-drop-while :function function :iterator iterator))
 
 (defmethod drop-while (function (sequence sequence))
-  (collect-to (generic-type-of sequence) (drop-while function (iterator sequence))))
+  (coerce (drop-while function (iterator sequence))
+          (generic-type-of sequence)))
 
 (defmethod index-where (function iterable)
   (let ((index 0))
@@ -348,4 +418,24 @@
 (defmethod exists (function iterable &rest iterables)
   (apply #'some function iterable iterables))
 
+(defmethod lessp ((iter1 iterator) (iter2 iterator))
+  (let ((id-count 0))
+    (doiters ((iter1 iter1)
+              (iter2 iter2))
+      (let ((a (at iter1))
+            (b (at iter2)))
+        (cond
+          ((lessp a b) (return-from lessp id-count))
+          ((lessp b a) (return-from lessp nil))))
+      (incf id-count))
+    (when (and (endp iter1) (not (endp iter2)))
+      id-count)))
 
+(defmethod lessp ((seq1 sequence) (seq2 sequence))
+  (lessp (iterator seq1) (iterator seq2)))
+
+(defmethod greaterp ((iter1 iterator) (iter2 iterator))
+  (lessp iter2 iter1))
+
+(defmethod greaterp ((seq1 sequence) (seq2 sequence))
+  (greaterp (iterator seq1) (iterator seq2)))

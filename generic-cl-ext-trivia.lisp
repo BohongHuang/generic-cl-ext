@@ -1,6 +1,6 @@
 (defpackage :generic-cl-ext.trivia
-  (:use :cl :trivia :alexandria)
-  (:shadowing-import-from :generic-cl :< :> :<= :>= := :/=))
+  (:use #:cl #:trivia #:alexandria)
+  (:shadowing-import-from #:generic-cl #:< #:> #:<= #:>= #:= #:/=))
 
 (in-package :generic-cl-ext.trivia)
 
